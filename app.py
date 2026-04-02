@@ -58,7 +58,7 @@ if st.button("🔍 开始预测", use_container_width=True):
     st.subheader("📊 预测结果与解释")
     st.metric("肝纤维化估计概率", f"{prob*100:.1f}%")
 
-    if prob >= 0.5:
+    if prob >= 0.3:
         st.error("⚠️ 您当前处于**高风险**肝纤维化状态，建议尽快就医进行进一步检查。")
     else:
         st.success("✅ 您当前处于**低风险**肝纤维化状态，请继续保持健康生活方式并定期复查。")
