@@ -1,106 +1,104 @@
-import streamlit as st
-import pickle
-import numpy as np
 import shap
+import pickle
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
+import matplotlib.patches as mpatches
+import pandas as pd
+import numpy as np
 
-# ── 加载模型 ──────────────────────────────────────────────
-@st.cache_resource
-def load_model():
-    with open("1.pkl", "rb") as f:
-        obj = pickle.load(f)
-    return obj
+# ── 风险分层阈值（X-tile计算结果）──────────────────────────────
+CUTOFF_LOW  = 0.15    # <15.00%  → 低风险
+CUTOFF_HIGH = 0.5108  # ≥51.08% → 高风险
+# 15.00% ~ 51.08% → 中风险
 
-obj = load_model()
+def get_risk_group(prob):
+    """根据预测概率返回风险分组标签"""
+    if prob < CUTOFF_LOW:
+        return "低风险 (Low Risk)",  "#4CAF50"   # 绿色
+    elif prob < CUTOFF_HIGH:
+        return "中风险 (Medium Risk)", "#FF9800"  # 橙色
+    else:
+        return "高风险 (High Risk)",  "#F44336"   # 红色
+
+# ── 1. 加载模型 ──────────────────────────────────────────────
+with open("C:\\Users\\admin\\Desktop\\1.pkl", "rb") as f:
+    obj = pickle.load(f)
+
 model    = obj["model"]
 features = obj["features"]
-shap_rel = obj["shap_relative_contribution"]
-cv_mean  = obj["cv_auc_mean"]
-cv_std   = obj["cv_auc_std"]
 
-# ── 页面设置 ──────────────────────────────────────────────
-st.set_page_config(page_title="肝纤维化风险预测", page_icon="🏥", layout="centered")
-st.title("🏥 肝纤维化风险预测模型")
-st.caption(f"基于随机森林分类器 | 交叉验证 AUC: {cv_mean:.3f} ± {cv_std:.3f}")
+# ── 2. 加载数据 ──────────────────────────────────────────────
+df = pd.read_excel("C:\\Users\\admin\\Desktop\\验证集完整.xlsx")
+X  = df[features]
+y  = df["Fibrosis"]
 
-# ── 输入表单 ──────────────────────────────────────────────
-st.subheader("请输入以下临床特征：")
+# ── 3. 计算 SHAP（log-odds 空间）────────────────────────────
+explainer   = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X)   # shape: (n_samples, n_features, 2)
 
-col1, col2 = st.columns(2)
-with col1:
-    age          = st.number_input("Age（年龄）",                    min_value=0.0,   max_value=120.0,  value=50.0,  step=1.0)
-    ast_alt      = st.number_input("AST_ALT_Ratio（AST/ALT比值）",   min_value=0.0,   max_value=20.0,   value=1.0,   step=0.01)
-    spleen_thick = st.number_input("SpleenThickness（脾脏厚度 mm）", min_value=0.0,   max_value=200.0,  value=35.0,  step=0.1)
-    spleen_len   = st.number_input("SpleenLength（脾脏长度 mm）",    min_value=0.0,   max_value=300.0,  value=100.0, step=0.1)
+ev_prob   = explainer.expected_value[1]
+shap_prob = shap_values[:, :, 1]
 
-with col2:
-    platelet  = st.number_input("Platelet（血小板 ×10⁹/L）", min_value=0.0, max_value=1000.0, value=200.0, step=1.0)
-    ferritin  = st.number_input("Ferritin（铁蛋白 ng/mL）",  min_value=0.0, max_value=5000.0, value=100.0, step=1.0)
-    liver_par = st.number_input("LiverParenchyma（肝实质）", min_value=0.0, max_value=10.0,   value=1.0,   step=0.1)
+logit = lambda p: np.log(p / (1 - p + 1e-10))
 
-# ── 预测按钮 ──────────────────────────────────────────────
-if st.button("🔍 开始预测", use_container_width=True):
-    input_values = {
-        "AST_ALT_Ratio":   ast_alt,
-        "SpleenThickness": spleen_thick,
-        "SpleenLength":    spleen_len,
-        "Age":             age,
-        "Platelet":        platelet,
-        "Ferritin":        ferritin,
-        "LiverParenchyma": liver_par,
-    }
-    X = np.array([[input_values[f] for f in features]])
-    prob = model.predict_proba(X)[0][1]
+ev_logodds      = logit(ev_prob)
+fx_prob_all     = ev_prob + shap_prob.sum(axis=1)
+fx_logodds_all  = logit(fx_prob_all)
+delta_logodds   = fx_logodds_all - ev_logodds
+total_shap_prob = shap_prob.sum(axis=1)
 
-    # ── 结果展示 ──
-    st.subheader("📊 预测结果与解释")
-    st.metric("肝纤维化估计概率", f"{prob*100:.1f}%")
+scale = np.where(
+    np.abs(total_shap_prob) > 1e-10,
+    delta_logodds / total_shap_prob,
+    0
+)
+shap_logodds = shap_prob * scale[:, np.newaxis]
 
-    if prob >= 0.3:
-        st.error("⚠️ 您当前处于**高风险**肝纤维化状态，建议尽快就医进行进一步检查。")
-    else:
-        st.success("✅ 您当前处于**低风险**肝纤维化状态，请继续保持健康生活方式并定期复查。")
+print(f"Base value (log-odds): {ev_logodds:.4f}")
+print(f"风险分层阈值: 低风险 < {CUTOFF_LOW*100:.2f}% ≤ 中风险 < {CUTOFF_HIGH*100:.2f}% ≤ 高风险")
+print("-" * 60)
 
-   # ── SHAP 力图（Force Plot）──
-    st.subheader("🔬 各特征对预测的贡献（SHAP）")
+# ── 4. 选择样本并绘图 ─────────────────────────────────────────
+sample_index = 33   # ← 改这个数字查看不同样本（0 ~ len(df)-1）
 
-    explainer = shap.TreeExplainer(model)
-    shap_vals = explainer.shap_values(X)
-    shap_arr  = np.array(shap_vals)
+sv   = shap_logodds[sample_index]
+fx   = ev_logodds + sv.sum()
+prob = 1 / (1 + np.exp(-fx))
 
-    # 取 class=1 的 SHAP 值和期望值
-    if shap_arr.ndim == 3:
-        if shap_arr.shape[0] == X.shape[0]:   # (1,7,2)
-            sv = shap_arr[0, :, 1]
-            ev = float(np.array(explainer.expected_value)[1])
-        else:                                   # (2,1,7)
-            sv = shap_arr[1, 0, :]
-            ev = float(np.array(explainer.expected_value)[1])
-    elif shap_arr.ndim == 2:
-        sv = shap_arr[0, :]
-        ev = float(np.array(explainer.expected_value).flat[1])
-    else:
-        sv = shap_arr
-        ev = float(np.array(explainer.expected_value).flat[0])
+risk_label, risk_color = get_risk_group(prob)
 
-    sv = sv.flatten().astype(float)
+print(f"样本 {sample_index}")
+print(f"  f(x)       = {fx:.4f}")
+print(f"  预测概率    = {prob:.3f} ({prob*100:.1f}%)")
+print(f"  真实标签    = {y.iloc[sample_index]}")
+print(f"  风险分层    = {risk_label}")
 
-    # 画力图
-    import pandas as pd
-    sample_display = pd.Series(
-        {features[i]: float(X[0][i]) for i in range(len(features))}
-    )
+# ── 5. 绘制 force plot ────────────────────────────────────────
+shap.force_plot(
+    ev_logodds,
+    sv,
+    X.iloc[sample_index],
+    matplotlib=True,
+    show=False,
+    text_rotation=0,
+)
 
-    shap.force_plot(
-        ev, sv, sample_display,
-        matplotlib=True, show=False
-    )
-    fig = plt.gcf()
-    fig.set_size_inches(20, 4)
-    plt.subplots_adjust(left=0.02, right=0.98, top=0.85, bottom=0.25)
-    st.pyplot(fig, use_container_width=True)
-    plt.close()
+fig = plt.gcf()
+fig.set_size_inches(20, 4)
+plt.subplots_adjust(left=0.02, right=0.98, top=0.75, bottom=0.25)
 
- 
+# 在图顶部添加风险分层标注
+fig.text(
+    0.5, 0.97,
+    f"f(x) = {fx:.4f}  |  预测概率 = {prob*100:.1f}%  |  风险分层：{risk_label}",
+    ha="center", va="top",
+    fontsize=13, fontweight="bold",
+    color=risk_color,
+    transform=fig.transFigure
+)
+
+plt.savefig("C:\\Users\\admin\\Desktop\\force_plot.svg",
+            format="svg", bbox_inches="tight", dpi=150)
+plt.show()
+print(f"\n图片已保存至桌面 force_plot.svg")
+
+
