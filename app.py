@@ -250,25 +250,4 @@ if st.button("🔍  Submit Prediction", type="primary", use_container_width=True
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
-    # 特征贡献条形图
-    st.markdown("#### Feature Contribution Bar Chart")
-    contrib = pd.Series(shap_lo, index=features).sort_values()
-    bar_colors = ["#dc3545" if v > 0 else "#1e90ff" for v in contrib]
-
-    fig2, ax = plt.subplots(figsize=(8, max(4, len(features) * 0.38)))
-    ax.barh(contrib.index, contrib.values, color=bar_colors)
-    ax.axvline(0, color="black", linewidth=0.8, linestyle="--")
-    ax.set_xlabel("SHAP Value (log-odds space)", fontsize=10)
-    ax.set_title(
-        "Feature Contributions\n🔴 Red = increases fibrosis risk  |  🔵 Blue = decreases risk",
-        fontsize=10,
-    )
-    ax.tick_params(labelsize=9)
-    plt.tight_layout()
-    st.pyplot(fig2, use_container_width=True)
-    plt.close(fig2)
-
-    st.caption(
-        f"Risk stratification thresholds (X-tile): "
-        f"Low Risk < {CUTOFF_LOW*100:.1f}%  ≤  Medium Risk < {CUTOFF_HIGH*100:.1f}%  ≤  High Risk"
-    )
+   
